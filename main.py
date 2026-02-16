@@ -10,6 +10,7 @@ from threading import Thread
 app = Flask('')
 @app.route('/')
 def home(): return "L'arbitre est prêt."
+
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive():
     t = Thread(target=run)
@@ -22,7 +23,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 def d(faces): return random.randint(1, faces)
 
-# --- CLASSES DE CONFIGURATION ---
+# --- CONFIGURATION MATCH ---
 class NameModal(discord.ui.Modal):
     def __init__(self, player_num, parent_view):
         super().__init__(title=f"Nom du Personnage - Joueur {player_num}")
@@ -83,7 +84,7 @@ class MatchView(discord.ui.View):
 
     @discord.ui.button(label="LANCER LES DÉS 🎲", style=discord.ButtonStyle.success)
     async def lancer_bouton(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # SÉCURITÉ : On valide l'interaction AVANT tout calcul
+        # 1. Validation immédiate de l'interaction pour éviter l'échec
         await interaction.response.defer()
 
         async with self.lock:
@@ -98,8 +99,7 @@ class MatchView(discord.ui.View):
                 self.actions.clear()
                 self.stop()
                 
-                # Modification visuelle immédiate
-                await interaction.followup.edit_message(message_id=interaction.message.id, content="🎲 **Calcul...**", embed=None, view=None)
+                await interaction.followup.edit_message(message_id=interaction.message.id, content="🎲 **Calcul des résultats...**", embed=None, view=None)
                 await self.resolution_tour(interaction.channel, donnees)
             else:
                 await interaction.followup.edit_message(message_id=interaction.message.id, content=f"✅ **{interaction.user.display_name}** a lancé !")
@@ -111,17 +111,17 @@ class MatchView(discord.ui.View):
         def calculer(r_j, r_adv):
             nb_buts, b_v = 0, r_j['bat']
             txt_b, b_a, b_d = f"🏏 **Batteur ({b_v})** : ", 0, 0
-            if b_v == 1: txt_b += "⚠️ **Faute ! (-2 Déf)**"; b_d = -2
-            elif b_v == 2: txt_b += "🛡️ **Renfort ! (+2 Déf)**"; b_d = 2
-            elif b_v == 3: txt_b += "🎯 **Ouverture ! (+2 Atk)**"; b_a = 2
+            s_a, s_d = str(r_j['atk']), str(r_j['def'])
+            if b_v == 1: txt_b += "⚠️ **Faute ! (-2 Déf)**"; b_d = -2; s_d = f"{r_j['def']}-2"
+            elif b_v == 2: txt_b += "🛡️ **Renfort ! (+2 Déf)**"; b_d = 2; s_d = f"{r_j['def']}+2"
+            elif b_v == 3: txt_b += "🎯 **Ouverture ! (+2 Atk)**"; b_a = 2; s_a = f"{r_j['atk']}+2"
             elif b_v == 4: txt_b += "💥 **Exploit ! (+1 but)**"
             
             b_da = -2 if r_adv['bat'] == 1 else (2 if r_adv['bat'] == 2 else 0)
-            s_a = f"{r_j['atk']}{'+2' if b_a==2 else ''}"
             s_da = f"{r_adv['def']}{'+' if b_da > 0 else ''}{b_da}" if b_da != 0 else str(r_adv['def'])
-            
             f_a, f_da = r_j['atk'] + b_a, r_adv['def'] + b_da
             ecart = f_a - f_da
+            
             txt_a = f"\n🏹 **Attaque ({s_a})** vs **Défense ({s_da})** : "
             if ecart > 0:
                 nb_buts = 3 if ecart >= 8 else (2 if ecart > 3 else 1)
