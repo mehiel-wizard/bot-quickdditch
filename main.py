@@ -76,6 +76,94 @@ class MatchView(discord.ui.View):
         self.lock = asyncio.Lock()
 
     async def lancer_tour(self, channel):
+        self.actions = {self.j1.id: None}import discord
+from discord.ext import commands
+import os
+import random
+import asyncio
+from flask import Flask
+from threading import Thread
+
+# --- SERVEUR RENDER ---
+app = Flask('')
+@app.route('/')
+def home(): return "L'arbitre est sur le terrain ! 🏟️"
+
+def run(): app.run(host='0.0.0.0', port=8080)
+def keep_alive():
+    t = Thread(target=run, daemon=True)
+    t.start()
+
+# --- CONFIG BOT ---
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+def d(faces): return random.randint(1, faces)
+
+# --- CLASSES DU JEU ---
+class NameModal(discord.ui.Modal):
+    def __init__(self, player_num, parent_view):
+        super().__init__(title=f"Nom du Personnage - Joueur {player_num}")
+        self.player_num, self.parent_view = player_num, parent_view
+        self.name_input = discord.ui.TextInput(label="Nom du sorcier", min_length=2, max_length=20)
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent_view.names[interaction.user.id] = self.name_input.value
+        await interaction.response.send_message(f"✅ Nom enregistré : **{self.name_input.value}**", ephemeral=True)
+        await self.parent_view.check_start(interaction.channel)
+
+class StartMenuView(discord.ui.View):
+    def __init__(self, author):
+        super().__init__(timeout=60)
+        self.author = author
+
+    @discord.ui.button(label="Mode Solo", style=discord.ButtonStyle.primary)
+    async def solo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return
+        view = SetupMatchView(self.author, is_solo=True)
+        await interaction.response.edit_message(content="🧙‍♂️ **Mode Solo** ! Choisissez votre nom :", view=view)
+
+    @discord.ui.button(label="Mode Duel", style=discord.ButtonStyle.success)
+    async def duel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return
+        await interaction.response.edit_message(content="🤝 **Duel** : Tapez `!duel @nom` pour défier quelqu'un !", view=None)
+
+class SetupMatchView(discord.ui.View):
+    def __init__(self, j1, j2=None, is_solo=False):
+        super().__init__(timeout=120)
+        self.j1 = j1
+        self.j2_id = j2.id if j2 else "CPU"
+        self.is_solo = is_solo
+        self.names = {j1.id: None, self.j2_id: "Équipe adverse" if is_solo else None}
+
+    @discord.ui.button(label="Joueur 1 : Choisir mon nom", style=discord.ButtonStyle.secondary)
+    async def set_j1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.j1.id: return
+        await interaction.response.send_modal(NameModal(1, self))
+
+    @discord.ui.button(label="Joueur 2 : Choisir mon nom", style=discord.ButtonStyle.secondary)
+    async def set_j2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.is_solo or interaction.user.id != self.j2_id: return
+        await interaction.response.send_modal(NameModal(2, self))
+
+    async def check_start(self, channel):
+        if all(v is not None for v in self.names.values()):
+            self.stop()
+            game = MatchView(self.j1, self.j2_id, self.names, self.is_solo)
+            await game.lancer_tour(channel)
+
+class MatchView(discord.ui.View):
+    def __init__(self, j1, j2_id, names, is_solo):
+        super().__init__(timeout=300)
+        self.j1, self.j2_id, self.names, self.is_solo = j1, j2_id, names, is_solo
+        self.scores = {j1.id: 0, j2_id: 0}
+        self.tour = 1
+        self.actions = {}
+        self.lock = asyncio.Lock()
+
+    async def lancer_tour(self, channel):
         self.actions = {self.j1.id: None}
         if not self.is_solo: self.actions[self.j2_id] = None
         embed = discord.Embed(title=f"🏟️ TOUR {self.tour} / 6", color=discord.Color.blue())
@@ -84,7 +172,7 @@ class MatchView(discord.ui.View):
 
     @discord.ui.button(label="LANCER LES DÉS 🎲", style=discord.ButtonStyle.success)
     async def lancer_bouton(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 1. Validation immédiate de l'interaction pour éviter l'échec
+        # 🛡️ RÉPONSE IMMÉDIATE POUR ÉVITER "L'ÉCHEC D'INTERACTION"
         await interaction.response.defer()
 
         async with self.lock:
@@ -95,18 +183,23 @@ class MatchView(discord.ui.View):
             if self.is_solo: self.actions["CPU"] = {"atk": d(10), "def": d(6), "bat": d(4)}
 
             if all(v is not None for v in self.actions.values()):
-                donnees = self.actions.copy()
+                donnees_tours = self.actions.copy()
                 self.actions.clear()
                 self.stop()
                 
+                # On utilise followup car on a fait un defer()
                 await interaction.followup.edit_message(message_id=interaction.message.id, content="🎲 **Calcul des résultats...**", embed=None, view=None)
-                await self.resolution_tour(interaction.channel, donnees)
+                await self.resolution_tour(interaction.channel, donnees_tours)
             else:
-                await interaction.followup.edit_message(message_id=interaction.message.id, content=f"✅ **{interaction.user.display_name}** a lancé !")
+                lances = [self.names[u] for u, a in self.actions.items() if a is not None]
+                status = "\n".join([f"✅ **{n}** a lancé ses dés !" for n in lances])
+                embed = interaction.message.embeds[0]
+                embed.description = f"**{self.names[self.j1.id]}** ⚔️ **{self.names[self.j2_id]}**\n\n{status}"
+                await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
 
-    async def resolution_tour(self, channel, acts):
+    async def resolution_tour(self, channel, actions_du_tour):
         n1, n2 = self.names[self.j1.id], self.names[self.j2_id]
-        r1, r2 = acts[self.j1.id], acts[self.j2_id]
+        r1, r2 = actions_du_tour[self.j1.id], actions_du_tour[self.j2_id]
 
         def calculer(r_j, r_adv):
             nb_buts, b_v = 0, r_j['bat']
@@ -119,16 +212,19 @@ class MatchView(discord.ui.View):
             
             b_da = -2 if r_adv['bat'] == 1 else (2 if r_adv['bat'] == 2 else 0)
             s_da = f"{r_adv['def']}{'+' if b_da > 0 else ''}{b_da}" if b_da != 0 else str(r_adv['def'])
+            
             f_a, f_da = r_j['atk'] + b_a, r_adv['def'] + b_da
             ecart = f_a - f_da
-            
             txt_a = f"\n🏹 **Attaque ({s_a})** vs **Défense ({s_da})** : "
+            
             if ecart > 0:
                 nb_buts = 3 if ecart >= 8 else (2 if ecart > 3 else 1)
                 txt_a += f"✅ **Réussi ! (Écart: {ecart})**"
             else: txt_a += "🧤 **Arrêté !**"
+            
             if b_v == 4: nb_buts += 1
-            return nb_buts * 10, f"{txt_b}{txt_a}\n➡️ **RÉSULTAT : {nb_buts} but(s) ({nb_buts*10} pts)**"
+            pts = nb_buts * 10
+            return pts, f"{txt_b}{txt_a}\n➡️ **RÉSULTAT : {nb_buts} but(s) ({pts} pts)**"
 
         p1, d1 = calculer(r1, r2)
         p2, d2 = calculer(r2, r1)
@@ -143,8 +239,10 @@ class MatchView(discord.ui.View):
         
         self.tour += 1
         await asyncio.sleep(2)
-        if self.tour <= 6: await self.lancer_tour(channel)
-        else: await self.vif_dor(channel)
+        if self.tour <= 6: 
+            await self.lancer_tour(channel)
+        else: 
+            await self.vif_dor(channel)
 
     async def vif_dor(self, channel):
         await channel.send("\n✨ **7ème TOUR : VIF D'OR !**")
@@ -155,19 +253,25 @@ class MatchView(discord.ui.View):
         self.scores[win_id] += 50
         embed = discord.Embed(title="🟡 CAPTURE", description=f"🎲 **{n1}** : `{v1}` | **{n2}** : `{v2}`\n🏆 **{self.names[win_id]}** l'attrape !", color=discord.Color.yellow())
         await channel.send(embed=embed)
+        
         s1, s2 = self.scores[self.j1.id], self.scores[self.j2_id]
         winner = n1 if s1 > s2 else (n2 if s2 > s1 else "Égalité")
         await channel.send(f"# 🏁 MATCH TERMINÉ\nVictoire : **{winner}** (`{s1}-{s2}`)")
 
 # --- COMMANDES ---
 @bot.command()
-async def match(ctx): await ctx.send("🧙‍♂️ **Bienvenue !**", view=StartMenuView(ctx.author))
+async def match(ctx):
+    await ctx.send("🧙‍♂️ **Bienvenue !**", view=StartMenuView(ctx.author))
+
 @bot.command()
 async def duel(ctx, adversaire: discord.Member):
     if adversaire.bot or adversaire == ctx.author: return
-    await ctx.send(f"🏟️ **Duel lancé !**", view=SetupMatchView(ctx.author, adversaire))
+    view = SetupMatchView(ctx.author, adversaire)
+    await ctx.send(f"🏟️ **Duel lancé !**", view=view)
+
 @bot.event
-async def on_ready(): print(f"✅ Arbitre prêt !")
+async def on_ready():
+    print(f"✅ Arbitre prêt !")
 
 keep_alive()
 bot.run(os.environ['DISCORD_TOKEN'])
